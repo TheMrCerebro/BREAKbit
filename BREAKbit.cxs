@@ -1,0 +1,734 @@
+'*********************************************************************
+'
+' Copyright (c) 2020-2022 TheMrCerebro
+'
+' BREAKbit - Zlib license.
+'
+' This software is provided 'as-is', without any express or
+' implied warranty. In no event will the authors be held
+' liable for any damages arising from the use of this software.
+'
+' Permission is granted to anyone to use this software for any purpose,
+' including commercial applications, and to alter it and redistribute
+' it freely, subject to the following restrictions:
+'
+' 1. The origin of this software must not be misrepresented;
+' you must not claim that you wrote the original software.
+' If you use this software in a product, an acknowledgment
+' in the product documentation would be appreciated but
+' is not required.
+'
+' 2. Altered source versions must be plainly marked as such,
+' and must not be misrepresented as being the original software.
+'
+' 3. This notice may not be removed or altered from any
+' source distribution.
+'
+'*********************************************************************
+
+#GLFW_WINDOW_TITLE="BREAKbit - by TheMrCerebro"
+#GLFW_WINDOW_WIDTH=512
+#GLFW_WINDOW_HEIGHT=512
+#MOJO_IMAGE_FILTERING_ENABLED=False
+
+Import mojo
+
+Import inc.particles
+Import inc.autofit
+Import inc.hscore
+Import inc.coldet
+Import inc.animated
+Import inc.fonts
+Import inc.shapes
+Import inc.waves
+
+Function Main()
+	New Game()
+End
+
+Class BLOCK
+	Field x#,y#,c%,life%,hit?
+End
+
+Class BALL
+	Field x#,y#,dx#,dy#,speed#,sticker?,sx#
+End
+
+Class POWERUP
+	Enumerate LASER,ENLARGE,MAGNET,REACTION,DISRUPTION,ACID
+	Field x#,y#,t%
+End
+
+Class BOX
+	Field x#,y#,t#
+End
+
+Class BULLET
+	Field x#,y#
+End
+
+Class Game Extends App
+
+	'constructor
+	Method OnCreate()
+				
+		SetVirtualDisplay(64,64)
+		SetUpdateRate(30)
+		Seed = Millisecs()
+
+		LoadFont("terminal.fnt")
+		
+		'carga las imagenes
+		imgPaddle 	  = LoadImage("paddle.png",8,2,2)
+		imgPowerup	  = LoadImage("powerups.png",7)
+		imgBall 	  = LoadImage("ball.png")
+		imgEnlarge 	  = LoadImage("enlarge.png",12,2,2)
+		imgBlock 	  = LoadImage("blocks.png",6,3,7)
+		imgTitle 	  = LoadImage("title.png")
+		imgHit		  = LoadImage("hit.png",4,Image.MidHandle)
+		imgMagnet 	  = LoadImage("magnet.png",8,4,4)
+		imgGuns 	  = LoadImage("guns.png")
+		imgTeleport   = LoadImage("teleport.png",9,3,4,Image.MidHandle)
+		imgHud		  = LoadImage("hud.png")
+
+		'carga los sonidos
+		sndLaser	 = LoadSound("laser.wav")
+		sndExplosion = LoadSound("explosion.wav")
+		sndHit		 = LoadSound("hit.wav")
+		sndPowerup	 = LoadSound("powerup.wav")
+		sndLimit	 = LoadSound("limit.wav")
+		sndSelect	 = LoadSound("select.wav")
+		sndHurt		 = LoadSound("hurt.wav")
+		sndFail		 = LoadSound("fail.wav")
+		sndNext		 = LoadSound("next.wav")
+		sndBox		 = LoadSound("box.wav")
+		sndWin		 = LoadSound("win.wav")
+	
+		'Crea una lista de puntuaciones ficticia
+		AddScore(620,"TMC")
+		AddScore(450,"JDP")
+		AddScore(210,"MGS")
+		AddScore(200,"HDF")
+		AddScore(180,"SMB")
+		
+		For Local i%=0 Until 8
+			bx[i]=New BOX
+			bx[i].x=Rnd(0,8)*8
+			bx[i].y=Rnd(0,8)*8
+			bx[i].t=Rnd(0,1)
+		Next
+
+		'Activa la musica
+		PlayMusic("theme.ogg")
+
+	end
+		
+	Method OnUpdate()
+
+		#If TARGET="glfw"
+		If KeyHit(KEY_ESCAPE) Then EndApp()
+		If KeyHit(KEY_F4)
+			fullscreen=Not fullscreen
+			If fullscreen
+				SetDeviceWindow(DesktopMode.Width,DesktopMode.Height,1)
+				HideMouse()
+			Else
+				SetDeviceWindow(512,512,4)
+				ShowMouse()
+			Endif
+		Endif
+		#Endif
+		
+		If fader=0
+
+			Select state
+				
+			Case STATE_MENU
+			
+				If KeyHit(KEY_X)
+					round=1
+					lifes=3
+					PlaySound(sndNext,7)
+					state=STATE_LOADING
+				Endif
+				
+			Case STATE_LOADING
+			
+				If time<30
+					time += 1
+					AddEmitter(time*2+Rnd(-0.5,0.5),25+Rnd(-0.5,0.5),0,0,255,255,0,1,0.075)
+					AddEmitter(65-time*2+Rnd(-0.5,0.5),41+Rnd(-0.5,0.5),0,0,255,255,0,1,0.075)
+				Else
+					CreateLevel()
+					state=STATE_INGAME
+				endif
+				
+			Case STATE_INGAME
+			
+			'Actualiza la raqueta
+			'############################################################
+
+				hit=False
+				
+				If KeyDown(KEY_LEFT)
+					pv = -1.5
+				Elseif KeyDown(KEY_RIGHT)
+					pv = 1.5
+				Else
+					pv/=1.5
+				endif
+
+				px += pv
+
+				If px<0 Then px=0
+				If px>(64-pw) Then px=64-pw
+				
+				If shot>0 'si esta habiliotado el disparo...
+					If KeyHit(KEY_X)
+						PlaySound(sndLaser,6)
+						For Local i%=0 Until 2
+							Local blt:=New BULLET
+							blt.x = px+1+(i*5)
+							blt.y = 60
+							bltA.AddLast(blt)
+						next
+					Endif
+					shot-=1
+				Else
+					If powerup=0 Then powerup=6
+				Endif
+
+				If magnet>0 'Si la raqueta se ha vuelto magnetica...
+					For Local bll:=Eachin bllA
+						If Not bll.sticker And rectRect(px,py,pw,2,bll.x,bll.y,2,2)
+							bll.sx		= bll.x-px
+							bll.sticker = True
+							bll.dx		= 0.0
+							bll.dy		= -1.0
+						Endif
+					Next
+					magnet-=1
+				Else
+					If powerup=2 Then powerup=6
+				Endif
+				
+				If acid>0
+					acid -=1
+				Else
+					If powerup=5 Then powerup=6
+					acid=0
+				endif
+				
+				'Reflejo
+				If reflect>0 Then reflect -= 1 Else reflect = 30*60
+				
+			'Actualiza las bolas
+			'############################################################
+				
+				For Local bll:=Eachin bllA
+				
+					If bll.speed>1.5 Then bll.speed=1.5
+				
+					If bll.sticker
+						bll.x = px+bll.sx
+						bll.y = py-3
+						If KeyHit(KEY_X) Then bll.sticker=False
+					Else
+						bll.x += bll.dx*bll.speed
+						bll.y += bll.dy*bll.speed
+						AddEmitter(bll.x+1+Rnd(-0.5,0.5),bll.y+1+Rnd(-0.5,0.5),0,0,255,255,0,1,0.075)
+					Endif
+					
+					If bll.x<0
+						AddAnimation(imgHit,0,bll.y)
+						PlaySound(sndHit,1)
+						bll.x  = 0
+						bll.dx *= -1
+					Endif
+					If bll.x>62
+						AddAnimation(imgHit,64,bll.y)
+						PlaySound(sndHit,1)
+						bll.x  = 62
+						bll.dx *= -1
+					Endif
+					If bll.y<7
+						AddAnimation(imgHit,bll.x,7)
+						PlaySound(sndHit,1)
+						bll.y  = 7
+						bll.dy *= -1
+					Endif
+					
+					'Si la bola colisiona con la pala...
+					If rectRect(px,py,pw,2,bll.x,bll.y,2,2)
+						bll.dx = (bll.x-px-(pw/2.0))/(pw/2.0)
+						If Abs(bll.dx)<0.3 Then bll.dx = 0.3*Sgn(bll.dx)
+						If Abs(bll.dx)>0.8 Then bll.dx = 0.8*Sgn(bll.dx)
+						bll.dy = -Sqrt(1.0 - bll.dx * bll.dx)
+						PlaySound(sndHit,1)
+						multi=1
+						hit=True
+					Endif
+			
+				'Actualiza los bloques
+				'############################################################
+			
+					For Local blk:=Eachin blkA
+
+						blk.hit=False
+	
+						Local ox#,oy#
+						If bll.dx<0 Then ox=6 Else ox=0
+						If bll.dy<0 Then oy=3 Else oy=0
+						
+						If lineRect(blk.x+ox,blk.y,blk.x+ox,blk.y+3,bll.x,bll.y,1,1)'Right
+							blk.life=0
+							If acid = 0 Then bll.dx *= -1
+						endif
+						If lineRect(blk.x,blk.y+oy,blk.x+6,blk.y+oy,bll.x,bll.y,2,2)'Button
+							blk.life=0
+							If acid = 0 Then bll.dy *= -1
+						Endif
+
+						If blk.life<1
+
+							If Int(Rnd(0,10))=5
+								PlaySound(sndBox,3)
+								Local pwu:=New POWERUP
+								pwu.x = blk.x-1
+								pwu.y = blk.y-2.5
+								pwu.t = Int(Rnd(0,6))
+								pwuA.AddLast(pwu)
+							Endif
+
+							PlaySound(sndExplosion,2)
+							Local r%,g%,b%
+							Select blk.c
+							Case 0;r=0;  g=0;  b=255
+							Case 1;r=255;g=0;  b=0
+							Case 2;r=255;g=255;b=0
+							Case 3;r=0;  g=255;b=0
+							Case 4;r=255;g=0;  b=255
+							Case 5;r=0;  g=255;b=255
+							Case 6;r=255;g=255;b=255
+							end
+							AddEmitter(blk.x+3,blk.y+1.5,0,0.1,r,g,b,18,0.025)
+							AddWave(blk.x+3,blk.y+1.5,255,255,255,5)
+							score += multi
+							multi += 1
+							bll.speed += 0.05
+							
+							blkA.RemoveEach(blk)
+							
+						endif
+			
+					Next
+				
+				'----------------------------------
+
+					If bll.y>61
+
+						AddWave(bll.x,bll.y,255,255,0,16,2,True)
+						AddAnimation(imgTeleport,bll.x,bll.y)
+						
+						If bllA.Count() = 1
+							fader = 1
+							If lifes>0
+								powerup = 6
+								px			= 28
+								pw			= 8
+								bll.x		= 31
+								bll.y		= py-3
+								bll.dx		= 0.0
+								bll.dy		= -1.0
+								bll.speed	= 1.0
+								bll.sticker = True
+								bll.sx		= 3
+								magnet		= 0
+								shot		= 0
+								multi		= 1
+								acid		= 0
+								reflect		= blkA.Count()+1
+								lifes -= 1
+								PlaySound(sndFail,5)
+								bltA.Clear()
+								pwuA.Clear()
+							Else
+								'Realiza una busqueda por si hay una puntuacion mayor
+								CheckScore()
+								state = STATE_OVER
+							Endif
+						Else
+							bllA.RemoveEach(bll)
+						Endif
+
+					Endif
+				
+				Next
+
+				'If KeyHit(KEY_8) Then blkA.Clear()
+				
+				'Si no quedan bloques, crea un nuevo nivel
+				If Not blkA.Count()
+					If round=29
+						PlaySound(sndWin,7)
+						'Realiza una busqueda por si hay una puntuacion mayor
+						CheckScore()
+						state = STATE_OVER
+					Else
+						PlaySound(sndNext,7)
+						ClearArrays()
+						round += 1
+						state = STATE_LOADING
+					endif
+				endif
+				
+			'Actualiza las balas
+			'############################################################
+			
+				For Local blt:=Eachin bltA
+				
+					If blt.y>0 Then blt.y -= 1 Else bltA.RemoveEach(blt)
+
+					For Local blk:=Eachin blkA
+						
+						If rectRect(blt.x,blt.y,1,1,blk.x,blk.y,6,3)
+							blk.hit=True
+							PlaySound(sndHurt,4)
+							blk.life -= 1
+							bltA.RemoveEach(blt)
+						Endif
+						
+					Next
+					
+				Next
+
+			'Actualiza los POWERUPs
+			'############################################################
+	
+				For Local pwu:=Eachin pwuA
+				
+					If pwu.y<64 Then pwu.y += 0.5 Else pwuA.RemoveEach(pwu)
+					
+					If rectRect(px,py,pw,2,pwu.x+2,pwu.y+2,4,4)
+
+						PlaySound(sndPowerup,3)
+						
+						Select pwu.t
+						
+						Case POWERUP.LASER
+							magnet = 0
+							shot   = 30*5
+							acid    = 0
+							pw      = 8
+							powerup = 0
+							
+						Case POWERUP.ENLARGE
+							magnet  = 0
+							shot    = 0
+							acid    = 0
+							pw      = 12
+							powerup = 1
+							
+						Case POWERUP.MAGNET
+							magnet = 30*5
+							shot   = 0
+							acid   = 0
+							pw     = 8
+							powerup = 2
+														
+						Case POWERUP.REACTION
+							Local rand%=1
+							For Local blk:=Eachin blkA
+								If rand=1 Then blk.life=0
+								rand=Rnd(0,4)
+							next
+					
+						Case POWERUP.DISRUPTION
+							For Local i%=0 Until 2
+								Local bll:=New BALL
+								bll.x  = bllA.Last().x
+								bll.y  = bllA.Last().y
+								bll.dx = Rnd(-1,1)
+								bll.dy = -1
+								bll.speed = 1.0
+								bllA.AddLast(bll)
+							Next
+							
+						Case POWERUP.ACID
+							magnet = 0
+							shot   = 0
+							acid   = 30*5
+							pw     = 8
+							powerup = 5
+							
+						End
+						
+						pwuA.RemoveEach(pwu)
+						
+					endif
+					
+				Next
+				
+			Case STATE_OVER
+
+				'Si hay una nueva puntuacion...
+				If ranking
+					EnterPlayer(sndSelect)
+				Else
+					If KeyHit(KEY_X)
+						score=0
+						txt=""
+						state=STATE_MENU
+					Endif
+				endif
+		
+			End
+
+		Endif
+		
+	'Actualiza el fondo de pantalla
+	'############################################################
+			
+		For Local i%=0 Until 8
+			If bx[i].t<0.1
+				bx[i].x=Int(Rnd(0,8))*8
+				bx[i].y=Int(Rnd(0,8))*8
+				bx[i].t=0.5
+			Else
+				bx[i].t-=0.05
+			endif
+		Next
+	      
+	'Actualiza las particulas
+	'############################################################
+	
+		UpdateParticles()
+		
+	'Actualiza las hondas
+	'############################################################
+	
+		UpdateWaves()
+		
+	'Actualiza las animaciones
+	'############################################################
+			
+		UpdateAnimations()
+		
+		'Actualiza el fundido de pantalla
+		If fader>0.05 Then fader -= 0.05 Else fader=0
+		
+	End
+
+    Method OnRender()
+    
+	    UpdateVirtualDisplay()
+        	
+		SetColor(255,0,0)   
+		For Local i%=0 Until 8
+	      	SetAlpha(bx[i].t)
+	      	DrawRect(bx[i].x,bx[i].y,8,8)
+		Next
+		
+		'Actualiza el temblor de la pantalla
+		If shake>0
+			Translate(Rnd(-1,1),Rnd(-1,1))
+			shake-=1
+		Endif
+		
+  		'Dibuja las particulas
+		DrawParticles()
+			    
+		'Dibuja las hondas
+		DrawWaves()
+
+		DrawAnimations()
+
+		Select state
+			
+		Case STATE_MENU
+		
+			DrawImage(imgTitle,0,2)
+			Text("[TheMrCerebro]",32,58,0.5,0.5)
+			
+			SetAlpha(0.5+Cos(0.5 * Millisecs() Mod 360)*0.5)
+			Text("Press",32,26,0.5,0.5)
+			Text("-X-",32,26+7,0.5,0.5)
+			Text("to START",32,26+7+7,0.5,0.5)
+			
+		Case STATE_LOADING
+		
+			Text("ROUND "+round,32,32,0.5,0.5)
+			
+			DrawImage(imgBall,time*2,24)
+			DrawImage(imgBall,64-time*2,40)
+			
+		Case STATE_INGAME
+
+			If acid>0 Then SetColor(0,255,0)
+	      	For Local bll:=Eachin bllA
+	      		DrawImage(imgBall,bll.x,bll.y)
+	      	Next
+	      	SetColor(255,255,255)
+	      
+	    	If pw=8 Then DrawImage(imgPaddle,px,py,hit) Else DrawImage(imgEnlarge,px,py,hit)
+	    	
+			For Local blk:= Eachin blkA
+				DrawImage(imgBlock,blk.x,blk.y,blk.c)
+				If blk.hit Then Rect(blk.x,blk.y,6,3)
+			Next
+			
+			If reflect<blkA.Count()
+				Local blk:=blkA.ToArray()[reflect]
+				Rect(blk.x,blk.y,6,3)
+			endif
+
+	      	For Local blt:=Eachin bltA
+	      		Rect(blt.x,blt.y,1,1)
+	      	Next
+	      	For Local pwu:=Eachin pwuA
+	      		DrawImage(imgPowerup,pwu.x,pwu.y,pwu.t)
+	      	Next
+
+	      	If shot>0 Then DrawImage(imgGuns,px,59)
+	      	If magnet>0 Then DrawImage(imgMagnet,px,60-4,0.01*Millisecs() Mod 4)
+
+			'Hud
+			DrawImage(imgHud,0,0)
+
+	        Local strc$,strr$
+	        If score<10 Then strc+="0"
+	        If score<100 Then strc+="0"
+	        If score<1000 Then strc+="0"
+	      	Text("   "+strc+score,1,-1)
+	        If round<10 Then strr+="0"
+	      	Text(strr+round,63,-1,1,0)
+
+	      	DrawImage(imgPowerup,32-4,-0.5,powerup)
+	      		      	
+			SetColor(255,255,0)
+			For Local i%=0 until lifes
+				Point(44,7+((i*2)-(lifes*2)))
+			Next
+			
+	      	SetColor(255,0,0)
+	      	Text("R:",56-fnt.TextWidth(strr+round),-1)
+
+		Case STATE_OVER
+
+			DrawScores(255,255,0,255,255,255)
+			
+		End
+		
+		'Actualiza el oscurecimiento d epantalla
+		If fader>0
+			SetColor(255,255,255)
+			SetAlpha(fader)
+			Rect(0,0,64,64)
+		Endif
+		
+	End
+	
+	Method CreateLevel()
+
+		'variables
+		px	    = 28
+		py	    = 60
+		pv	    = 0
+		pw	    = 8
+		fader   = 1
+		shot    = 0
+		magnet  = 0
+		multi   = 1
+		acid    = 0
+		time    = 0
+		powerup = 6
+					
+		ClearArrays()
+		
+		Local bll:=New BALL
+		bll.x		= 31
+		bll.y		= py-3
+		bll.dx		= 0.0
+		bll.dy		= -1.0
+		bll.speed	= 1.0
+		bll.sticker = True
+		bll.sx		= 3
+		bllA.AddLast(bll)
+		
+		'carga el nivel
+		Local lvl$ = LoadString("level"+round+".txt")
+		For Local i%=0 Until lvl.Length()
+		
+			Local t$ = lvl[i..i+1]
+
+			Select t
+			Case "0","1","2","3","4","5","6"
+				Local blk:=New BLOCK()
+				blk.x	 = 1+(i Mod 11)*7
+				blk.y	 = 12+(i/11)*4
+				blk.life = 3
+				blk.c	 = Int(t)
+				blkA.AddLast(blk)
+			End
+			
+		Next
+		
+		reflect = blkA.Count()+1
+
+	End
+	
+	Method ClearArrays:Void()
+		bllA.Clear()
+		blkA.Clear()
+		pwuA.Clear()
+		bltA.Clear()
+		wavA.Clear()
+		parA.Clear()
+	end
+	
+Private
+
+	'Listas
+	Field blkA:= New List<BLOCK>  'bloques
+	Field bllA:= New List<BALL>   'bolas
+	Field pwuA:= New List<POWERUP>'POWERUP
+	Field bltA:= New List<BULLET> 'balas
+	
+	'Imagenes
+	Field imgPaddle:Image
+	Field imgBall:Image
+	Field imgBlock:Image
+	Field imgPowerup:Image
+	Field imgTitle:Image
+	Field imgHit:Image
+	Field imgMagnet:Image
+	Field imgGuns:Image
+	Field imgTeleport:Image
+	Field imgEnlarge:Image
+	Field imgHud:Image
+	
+	'Sonidos
+	Field sndLaser:Sound
+	Field sndExplosion:Sound
+	Field sndHit:Sound
+	Field sndPowerup:Sound
+	Field sndLimit:Sound
+	Field sndSelect:Sound
+	Field sndHurt:Sound
+	Field sndFail:Sound
+	Field sndNext:Sound
+	Field sndBox:Sound
+	Field sndWin:Sound
+	
+	'Enumeradores
+	Enumerate STATE_MENU,STATE_LOADING,STATE_INGAME,STATE_OVER,STATE_WIN
+	
+	'Variables
+	Field state%,fullscreen?
+	Field px#,py#,pv#,pw#,hit?
+	Field shot%,magnet%,acid%
+	Field bx:BOX[9]
+	Field fader#,shake%
+	Field round%,lifes%,multi%,time%,powerup%,reflect#
+	
+End
